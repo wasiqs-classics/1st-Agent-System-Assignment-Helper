@@ -8,6 +8,8 @@ load_dotenv()  # Load variables from .env file
 
 # Configure Gemini API Key (Use environment variables for security in production)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # Get from environment variables
+print(f"GEMINI_API_KEY: {GEMINI_API_KEY}")
+
 if not GEMINI_API_KEY:
     st.error("Please set the GEMINI_API_KEY environment variable.")
     st.stop()
