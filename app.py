@@ -3,18 +3,53 @@ import google.generativeai as genai
 import os
 import time
 from dotenv import load_dotenv
+import json
 
 load_dotenv()  # Load variables from .env file
 
-# Configure Gemini API Key (Use environment variables for security in production)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # Get from environment variables
-print(f"GEMINI_API_KEY: {GEMINI_API_KEY}")
-
+# Configure Gemini API Key (Use environment variables for security)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     st.error("Please set the GEMINI_API_KEY environment variable.")
     st.stop()
 genai.configure(api_key=GEMINI_API_KEY)
 
+
+def save_project(project_name, conversation_history):
+    """Saves the project and its conversation history to a JSON file."""
+    project_data = {"name": project_name, "history": conversation_history}
+    try:
+        with open(f"{project_name}.json", "w") as f:
+            json.dump(project_data, f, indent=4)
+    except Exception as e:
+        st.error(f"Error saving project: {e}")
+
+# ... (rest of the code)
+
+# Load Projects (Optional)
+def load_projects():
+    import glob
+    projects = {}
+    for filename in glob.glob("*.json"):
+        try:
+            with open(filename, 'r') as f:
+                project_data = json.load(f)
+                projects[project_data['name']] = project_data['history']
+        except Exception as e:
+            st.error(f"Error loading project: {e}")
+    return projects
+
+# In the sidebar's "Old Projects" expander:
+with st.sidebar.expander("Old Projects", expanded=False):
+    projects = load_projects()
+    if projects:
+        for project_name, history in projects.items():
+            if st.button(f"Open {project_name}"):
+                st.session_state["active_project"] = project_name
+                st.session_state["conversation_history"] = history
+                st.experimental_rerun()
+    else:
+        st.write("No saved projects yet.")
 def upload_to_gemini(path, mime_type=None):
     """Uploads the given file to Gemini."""
     try:
@@ -34,7 +69,7 @@ def wait_for_files_active(files):
     for i, name in enumerate((file.name for file in files)):
         file = genai.get_file(name)
         while file.state.name == "PROCESSING":
-            time.sleep(5) # Reduce sleep time for faster feedback in Streamlit
+            time.sleep(5)  # Reduce sleep time for faster feedback
             file = genai.get_file(name)
         if file.state.name != "ACTIVE":
             raise Exception(f"File {file.name} failed to process")
@@ -68,9 +103,10 @@ def get_model(model_name="gemini-2.0-flash-exp"):
 # Streamlit App
 st.sidebar.title("Agentic Assignment Evaluator")
 
-# Initialize session state for active project
+# Initialize session state for active project and conversation history
 if "active_project" not in st.session_state:
     st.session_state["active_project"] = "Untitled Project"
+    st.session_state["conversation_history"] = []
 
 # Display active project name
 st.sidebar.write(f"**Active Project:** {st.session_state['active_project']}")
@@ -82,7 +118,7 @@ with st.sidebar.expander("Old Projects", expanded=False):
 # Sidebar Menu
 menu = st.sidebar.radio("Navigation", ["Upload Brief", "Submit Assignment"])
 
-# Main Content
+# Main content
 if menu == "Upload Brief":
     st.title("Upload Assignment Brief")
     st.write(
@@ -94,6 +130,7 @@ if menu == "Upload Brief":
     uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
     if uploaded_file:
         st.success(f"File '{uploaded_file.name}' uploaded successfully!")
+
         # Save the uploaded file temporarily
         with open(uploaded_file.name, "wb") as f:
             f.write(uploaded_file.getbuffer())
@@ -102,23 +139,32 @@ if menu == "Upload Brief":
             uploaded_file_gemini = upload_to_gemini(uploaded_file.name, mime_type="application/pdf")
             wait_for_files_active([uploaded_file_gemini])
 
-            if uploaded_file_gemini: # Check if upload was successful
+            if uploaded_file_gemini:  # Check if upload was successful
                 model = get_model()
 
-                chat_session = model.start_chat(
-                    history=[
-                        {
-                            "role": "user",
-                            "parts": [uploaded_file_gemini, "Please help me with this assignment"],
-                        }
-                    ]
-                )
+                chat_session = model.start_chat(history=st.session_state["conversation_history"])
 
-                response = chat_session.send_message("Generate step by step guide for the completion of this assignment")
+                user_query = "Generate step by step guide for the completion of this assignment"
+                response = chat_session.send_message(user_query)
                 st.write(response.text)
-            else:
-                st.error("Please upload a file and wait for processing to complete before generating an assignment guide.")
-        os.remove(uploaded_file.name) # Remove temporary file
+
+                st.session_state["conversation_history"].append({"role": "user", "parts": [user_query]})
+                st.session_state["conversation_history"].append({"role": "model", "parts": [response.text]})
+
+                col1, col2 = st.columns(2)
+                if col1.button("Step Completed"):
+                    save_project(st.session_state["active_project"], st.session_state["conversation_history"])
+                    st.success(f"Project '{st.session_state['active_project']}' saved!")
+                if col2.button("Need more on brief"):
+                    additional_query = st.text_input("Enter your query:")
+                    if additional_query:
+                        response = chat_session.send_message(additional_query)
+                        st.write(response.text)
+                        st.session_state["conversation_history"].append({"role": "user", "parts": [additional_query]})
+                        st.session_state["conversation_history"].append({"role": "model", "parts": [response.text]})
+
+        # Remove temporary file after processing
+        os.remove(uploaded_file.name)
 
 elif menu == "Submit Assignment":
     st.title("Submit Assignment")
@@ -127,3 +173,5 @@ elif menu == "Submit Assignment":
     if uploaded_assignment:
         st.success(f"Assignment '{uploaded_assignment.name}' uploaded successfully!")
         st.text("Evaluation is not implemented yet.")
+
+# (Optional) Implement functionality for loading projects from saved JSON files
